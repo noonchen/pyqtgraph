@@ -235,11 +235,40 @@ class BoxplotItem(GraphicsObject):
         # bounding rect of boxes
         rect = self._boxBounds.adjusted(-bpx, -bpy, bpx, bpy)
         return rect
+    
+    def calculateDataBounds(self):
+        loc, data = self.opts["loc"], self.opts["data"]
+        if data is None:
+            return QRectF()
+
+        lst_lower = []
+        lst_upper = []
+        for dataset in data:
+            dataset = np.asarray(dataset)
+            if self.opts["outlier"]:
+                lower, upper = np.min(dataset), np.max(dataset)
+            else:
+                lower, upper = self.whiskerFunc(dataset)
+            lst_lower.append(lower)
+            lst_upper.append(upper)
+        miny = np.min(lst_lower)
+        maxy = np.max(lst_upper)
+
+        if loc is None:
+            loc = np.arange(len(data))
+        loc = np.array(loc)
+        minx, maxx = np.min(loc), np.max(loc)
+        width = 0.8 if self.opts["width"] is None else self.opts["width"]
+        minx -= width/2
+        maxx += width/2
+
+        if not self.opts["locAsX"]:
+            minx, maxx, miny, maxy = miny, maxy, minx, maxx
+
+        return QRectF(QPointF(minx, miny), QPointF(maxx, maxy))
 
     def dataBounds(self, ax, frac=1.0, orthoRange=None):
-        if self.picture is None:
-            self.generatePicture()
-        br = self._boxBounds
+        br = self.calculateDataBounds()
         if ax == 0:
             return [br.left(), br.right()]
         else:
