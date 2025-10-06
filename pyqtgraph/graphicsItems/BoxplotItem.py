@@ -118,25 +118,61 @@ class BoxplotItem(GraphicsObject):
         else:
             loc = np.arange(len(data))
         
+        # box related style
         locAsX = self.opts["locAsX"]
         width = 0.8 if self.opts["width"] is None else self.opts["width"]
         pen = fn.mkPen("y" if self.opts["pen"] is None else self.opts["pen"])
         brush = fn.mkBrush(self.opts["brush"])
         medianPen = fn.mkPen("r" if self.opts["medianPen"] is None else self.opts["medianPen"])
         
+        # outlier related style
+        s = self.opts["symbol"]
+        if isinstance(s, str) and s in Symbols:
+            symbol = Symbols[s]
+        elif isinstance(s, QtGui.QPainterPath):
+            symbol = s
+        else:
+            symbol = Symbols["o"]
+        symbolPen = fn.mkPen(self.opts["symbolPen"])
+        symbolSize = 10 if self.opts["symbolSize"] is None else self.opts["symbolSize"]
+        symbolBrush = fn.mkBrush(self.opts["symbolBrush"])
+        
         p = QtGui.QPainter(self.picture)
+        tr = p.transform()
+        
         # for calculating bounding rect
         pw = pen.widthF() * 0.7072
         boxBounds = QRectF()
         pixelPadding = 0
+        # determine length of pixel in local x, y directions
+        px, py = self.pixelVectors()
+        symbolPadding = 0.7072 * (10 if self.opts["symbolSize"] is None else self.opts["symbolSize"])
+        spx = (px.length() or 0) * symbolPadding
+        spy = (py.length() or 0) * symbolPadding
+        
         for pos, dataset in zip(loc, data):
             dataset = np.asarray(dataset)
             p75, median, p25 = np.percentile(dataset, [75, 50, 25])
             lower, upper = self.whiskerFunc(dataset)
-            # get outlier data points if enabled
+            # draw outlier data points if enabled
             if self.opts["outlier"]:
+                p.setPen(symbolPen)
+                p.setBrush(symbolBrush)
                 mask = np.logical_or(dataset<lower, dataset>upper)
-                self.outlierData[pos] = dataset[mask]
+                outlierData = dataset[mask]
+                for o in outlierData:
+                    x, y = (pos, o) if self.opts["locAsX"] else (o, pos)
+                    p.resetTransform()
+                    p.translate(*tr.map(x, y))
+                    p.scale(symbolSize, symbolSize)
+                    p.drawPath(symbol)
+                # bounds of outliers
+                if len(outlierData) > 0:
+                    omin, omax = min(outlierData), max(outlierData)
+                    if self.opts["locAsX"]:
+                        boxBounds |= QRectF(pos-spx, omin-spy, 2*spx, omax-omin+2*spy)
+                    else:
+                        boxBounds |= QRectF(omin-spx, pos-spy, omax-omin+2*spx, 2*spy)
             
             p.setPen(pen)
             # whiskers
@@ -172,7 +208,7 @@ class BoxplotItem(GraphicsObject):
                 pixelPadding = max(pixelPadding, pw)
             else:
                 boxBounds |= rect.adjusted(-pw, -pw, pw, pw)
-            
+
         p.end()
         self._boxBounds = boxBounds
         self._pixelPadding = pixelPadding
@@ -181,78 +217,35 @@ class BoxplotItem(GraphicsObject):
         if self.picture is None:
             self.generatePicture()
         p.drawPicture(0, 0, self.picture)
-
-        if not self.opts["outlier"]:
-            return
-
-        # outlier related style
-        s = self.opts["symbol"]
-        if isinstance(s, str) and s in Symbols:
-            symbol = Symbols[s]
-        elif isinstance(s, QtGui.QPainterPath):
-            symbol = s
-        else:
-            symbol = Symbols["o"]
-        symbolPen = fn.mkPen(self.opts["symbolPen"])
-        symbolSize = 10 if self.opts["symbolSize"] is None else self.opts["symbolSize"]
-        symbolBrush = fn.mkBrush(self.opts["symbolBrush"])
-
-        p.setPen(symbolPen)
-        p.setBrush(symbolBrush)
-        tr = p.transform()
-        for pos, outliers in self.outlierData.items():
-            for o in outliers:
-                x, y = (pos, o) if self.opts["locAsX"] else (o, pos)
-                p.resetTransform()
-                p.translate(*tr.map(x, y))
-                p.scale(symbolSize, symbolSize)                
-                p.drawPath(symbol)
                     
     def boundingRect(self):
         if self.picture is None:
             self.generatePicture()
         
         bpx = bpy = 0.0
-        spx = spy = 0.0
         pxPad = self._pixelPadding
-        symbolPad = 0.7072 * (10 if self.opts["symbolSize"] is None else self.opts["symbolSize"])
-        if pxPad > 0 or symbolPad > 0:
+        if pxPad > 0:
             # determine length of pixel in local x, y directions
             px, py = self.pixelVectors()
-            try:
-                px = 0 if px is None else px.length()
-            except OverflowError:
-                px = 0
-            try:
-                py = 0 if py is None else py.length()
-            except OverflowError:
-                py = 0
-            # return bounds expanded by pixel size
-            if pxPad > 0:
-                bpx = px * pxPad
-                bpy = py * pxPad
-            if symbolPad > 0:
-                spx = px * symbolPad
-                spy = py * symbolPad
+            px = px.length() or 0
+            py = py.length() or 0
+            bpx = px * pxPad
+            bpy = py * pxPad
         
         # bounding rect of boxes
         rect = self._boxBounds.adjusted(-bpx, -bpy, bpx, bpy)
-        # bounding rect of outliers
-        if self.opts["outlier"]:
-            pos_min = min(self.outlierData.keys())
-            pos_max = max(self.outlierData.keys())
-            out_min = None
-            out_max = None
-            for v in self.outlierData.values():
-                if len(v) == 0:
-                    continue
-                out_min = v.min() if out_min is None else min(out_min, v.min())
-                out_max = v.max() if out_max is None else max(out_max, v.max())
-            
-            if out_min is not None and out_max is not None:
-                if self.opts["locAsX"]:
-                    rect |= QRectF(pos_min-spx, out_min-spy, pos_max-pos_min+2*spx, out_max-out_min+2*spy)
-                else:
-                    rect |= QRectF(out_min-spx, pos_min-spy, out_max-out_min+2*spx, pos_max-pos_min+2*spy)
         return rect
 
+    def dataBounds(self, ax, frac=1.0, orthoRange=None):
+        if self.picture is None:
+            self.generatePicture()
+        br = self._boxBounds
+        if ax == 0:
+            return [br.left(), br.right()]
+        else:
+            return [br.top(), br.bottom()]
+
+    def pixelPadding(self):
+        if self.picture is None:
+            self.generatePicture()
+        return self._pixelPadding
